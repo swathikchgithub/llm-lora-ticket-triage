@@ -1,0 +1,21 @@
+# Core fine-tuning stack (run on a CUDA GPU box, e.g. RunPod)
+torch==2.4.1
+transformers==4.44.2
+peft==0.12.0
+bitsandbytes==0.43.3
+accelerate==0.34.2
+datasets==2.21.0
+trl==0.9.6
+
+# Eval harness (runs anywhere, including this laptop, once results are pulled down)
+scikit-learn==1.5.1
+pandas==2.2.2
+numpy==1.26.4
+matplotlib==3.9.2
+tqdm==4.66.5
+
+# LLM-as-Judge (uses an external judge model via API)
+anthropic==0.34.2
+
+# Dev / test
+pytest==8.3.2
