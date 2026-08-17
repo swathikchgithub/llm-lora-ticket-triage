@@ -228,23 +228,6 @@ fine-tuning work:
   ticket data would need data governance sign-off, redaction pipelines, and
   audit trails on who accessed training data.
 
-## Interview summary (spoken, 3-4 sentences)
-
-"I built an end-to-end LoRA fine-tuning project on a small open-source
-model — Qwen2.5-1.5B — to classify IT support tickets into category and
-priority, going from raw synthetic data through QLoRA training on a rented
-GPU to a full evaluation harness. The part I actually care most about is
-the evaluation: I didn't just report accuracy, I compared the fine-tuned
-model against a strongly-prompted base model on accuracy per category,
-output consistency under repeated sampling, token cost, and JSON-validity
-rate, plus an LLM-as-judge score for the free-text justifications —
-calibrated against a hand-labeled set first, the same way I've done judge
-calibration in production eval work. The goal was to prove fine-tuning
-helped, with numbers, not just assume it — and to be explicit about
-exactly where this differs from production-scale fine-tuning, like dataset
-scale, distributed training, and the online A/B testing you'd need before
-shipping a fine-tuned model to real traffic."
-
 ## License
 
 MIT (or your preference — update before publishing).
