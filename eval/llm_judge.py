@@ -67,12 +67,19 @@ def build_judge_prompt(subject, description, priority, justification):
 def judge_one(client, model, subject, description, priority, justification):
     response = client.messages.create(
         model=model,
-        max_tokens=200,
+        max_tokens=500,
         system=RUBRIC,
         messages=[{"role": "user", "content": build_judge_prompt(
             subject, description, priority, justification)}],
     )
-    text = response.content[0].text.strip()
+    # Don't assume content[0] is the text block - some models emit a
+    # non-text block first (e.g. extended thinking), so scan for the
+    # first block that actually has text rather than indexing blindly.
+    text_blocks = [b.text for b in response.content if getattr(b, "text", None)]
+    if not text_blocks:
+        return {"relevance": None, "consistency": None, "specificity": None,
+                "overall": None, "reasoning": "PARSE_ERROR: no text block in response"}
+    text = text_blocks[0].strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
