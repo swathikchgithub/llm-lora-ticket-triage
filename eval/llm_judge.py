@@ -87,7 +87,23 @@ def judge_one(client, model, subject, description, priority, justification):
                 "overall": None, "reasoning": f"PARSE_ERROR: {text[:200]}"}
 
 
-def score_predictions_file(predictions_file, out_file, model, limit=None):
+def _load_ticket_lookup(test_file):
+    """predictions.jsonl doesn't carry subject/description (evaluate.py's
+    prediction records only keep the parsed labels + raw output), so grade
+    against the original ticket text by joining on ticket_id instead of
+    re-running GPU inference just to add two fields."""
+    lookup = {}
+    with open(test_file) as f:
+        for line in f:
+            ex = json.loads(line)
+            user_content = ex["messages"][1]["content"]
+            subject = user_content.split("Description:")[0].replace("Subject:", "").strip()
+            description = user_content.split("Description:", 1)[1].strip()
+            lookup[ex["ticket_id"]] = (subject, description)
+    return lookup
+
+
+def score_predictions_file(predictions_file, out_file, model, test_file, limit=None):
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
@@ -96,13 +112,15 @@ def score_predictions_file(predictions_file, out_file, model, limit=None):
     if limit:
         preds = preds[:limit]
 
+    ticket_lookup = _load_ticket_lookup(test_file)
+
     scored = []
     for p in preds:
         if not p.get("pred_justification"):
             continue
-        subject = p.get("subject", "")
+        subject, description = ticket_lookup.get(p["ticket_id"], ("", ""))
         judge_result = judge_one(
-            client, model, subject, p.get("description", ""),
+            client, model, subject, description,
             p["pred_priority"], p["pred_justification"],
         )
         scored.append({"ticket_id": p["ticket_id"], **judge_result})
@@ -111,7 +129,7 @@ def score_predictions_file(predictions_file, out_file, model, limit=None):
         for s in scored:
             f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
-    valid = [s["overall"] for s in scored if s["overall"] is not None]
+    valid = [s["overall"] for s in scored if s.get("overall") is not None]
     avg = sum(valid) / len(valid) if valid else 0.0
     print(f"Scored {len(scored)} justifications. Average overall score: {avg:.2f}/5")
     return scored
@@ -163,6 +181,7 @@ def main():
     score_p = sub.add_parser("score")
     score_p.add_argument("--predictions-file", required=True)
     score_p.add_argument("--out", required=True)
+    score_p.add_argument("--test-file", default="data/test.jsonl")
     score_p.add_argument("--model", default="claude-sonnet-5")
     score_p.add_argument("--limit", type=int, default=None)
 
@@ -173,7 +192,8 @@ def main():
 
     args = parser.parse_args()
     if args.command == "score":
-        score_predictions_file(args.predictions_file, args.out, args.model, args.limit)
+        score_predictions_file(args.predictions_file, args.out, args.model,
+                                args.test_file, args.limit)
     elif args.command == "calibrate":
         calibrate(args.calibration_file, args.model, args.tolerance)
 
