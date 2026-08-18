@@ -43,22 +43,47 @@ def to_chat_example(record):
 
 
 def stratified_split(records, ratios, seed):
-    """Time: O(n log n) for the shuffle; Space: O(n)."""
+    """Time: O(n log n) for the shuffle; Space: O(n).
+
+    Splits by *scenario group* (records sharing the same category + subject
+    text) rather than by individual record. The generator draws from a
+    small, fixed pool of scenario templates per category and only
+    randomizes names/departments/timing around them, so a row-level random
+    split lets near-identical phrasing leak into both train and test - the
+    model then "generalizes" by memorizing template wording instead of
+    learning the task. Grouping by subject keeps each scenario wholly on
+    one side of the split, so test measures unseen phrasing.
+    """
     assert abs(sum(ratios) - 1.0) < 1e-6
     rng = random.Random(seed)
-    by_category = defaultdict(list)
+
+    groups_by_category = defaultdict(lambda: defaultdict(list))
     for r in records:
-        by_category[r["label"]["category"]].append(r)
+        groups_by_category[r["label"]["category"]][r["subject"]].append(r)
 
     train, val, test = [], [], []
-    for category, items in by_category.items():
-        rng.shuffle(items)
-        n = len(items)
-        n_train = int(n * ratios[0])
-        n_val = int(n * ratios[1])
-        train += items[:n_train]
-        val += items[n_train:n_train + n_val]
-        test += items[n_train + n_val:]
+    for category, groups in groups_by_category.items():
+        group_keys = list(groups.keys())
+        rng.shuffle(group_keys)
+        n_groups = len(group_keys)
+
+        # Small group counts need floors, not pure ratio rounding, so val
+        # and test each keep at least one held-out scenario per category.
+        n_test = max(1, round(n_groups * ratios[2]))
+        n_val = max(1, round(n_groups * ratios[1]))
+        n_test, n_val = min(n_test, n_groups - 1), min(n_val, max(0, n_groups - n_test - 1))
+        n_train = n_groups - n_val - n_test
+
+        test_keys = group_keys[:n_test]
+        val_keys = group_keys[n_test:n_test + n_val]
+        train_keys = group_keys[n_test + n_val:n_test + n_val + n_train]
+
+        for k in train_keys:
+            train += groups[k]
+        for k in val_keys:
+            val += groups[k]
+        for k in test_keys:
+            test += groups[k]
 
     rng.shuffle(train)
     rng.shuffle(val)

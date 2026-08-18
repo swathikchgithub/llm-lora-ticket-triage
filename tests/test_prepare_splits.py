@@ -9,12 +9,16 @@ def _make_records(n=300, seed=42):
 
 
 def test_split_sizes_match_ratios_within_rounding():
+    # The split is grouped by scenario template (see test_no_scenario_leakage
+    # below), so sizes track ~80/10/10 only loosely - a whole group can only
+    # go to one side, and group sizes vary, so tolerance is wider than a
+    # row-level split would need.
     records = _make_records(500)
     train, val, test = stratified_split(records, (0.8, 0.1, 0.1), seed=0)
     assert len(train) + len(val) + len(test) == len(records)
-    assert abs(len(train) - 400) <= 10
-    assert abs(len(val) - 50) <= 10
-    assert abs(len(test) - 50) <= 10
+    assert abs(len(train) - 400) <= 40
+    assert abs(len(val) - 50) <= 25
+    assert abs(len(test) - 50) <= 25
 
 
 def test_no_overlap_between_splits():
@@ -26,6 +30,21 @@ def test_no_overlap_between_splits():
     assert train_ids.isdisjoint(val_ids)
     assert train_ids.isdisjoint(test_ids)
     assert val_ids.isdisjoint(test_ids)
+
+
+def test_no_scenario_leakage_between_splits():
+    # Regression test for a real bug: the original split stratified by
+    # category only, so the same scenario template (identical subject text,
+    # just name/department swapped) could appear in both train and test,
+    # letting the model "generalize" by memorizing template wording.
+    records = _make_records(500)
+    train, val, test = stratified_split(records, (0.8, 0.1, 0.1), seed=0)
+    train_subjects = {r["subject"] for r in train}
+    val_subjects = {r["subject"] for r in val}
+    test_subjects = {r["subject"] for r in test}
+    assert train_subjects.isdisjoint(val_subjects)
+    assert train_subjects.isdisjoint(test_subjects)
+    assert val_subjects.isdisjoint(test_subjects)
 
 
 def test_stratification_keeps_every_category_in_every_split():
