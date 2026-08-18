@@ -91,6 +91,10 @@ def run_config(model, tokenizer, test_examples, use_few_shot, consistency_runs, 
             repeated_category_preds[ex["ticket_id"]].append(
                 parsed_r.get("category") if ok_r else "PARSE_ERROR"
             )
+        # Attach this ticket's repeat outcomes to its prediction record so
+        # consistency drops can be diagnosed later (e.g. PARSE_ERROR vs. a
+        # genuine category disagreement) without re-running generation.
+        predictions[-1]["repeated_category_preds"] = repeated_category_preds[ex["ticket_id"]]
 
     report = {
         "n_examples": len(test_examples),
