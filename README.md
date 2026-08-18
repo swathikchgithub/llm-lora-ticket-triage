@@ -133,22 +133,115 @@ strawman) on the held-out test set, across multiple dimensions:
 
 ## Results
 
-*(Fill in after running `scripts/train_lora.py` then `eval/evaluate.py` on
-RunPod — see the runbook. Numbers below are placeholders showing the report
-shape, not real measurements.)*
+Trained on an RTX A4000 (RunPod), 3 epochs, ~7 min wall-clock, well under
+$1. Numbers below are real, from `results/comparison_report.md` and
+`results/finetuned_model/merged_latency.json`.
 
-| Metric | Prompted Base (3-shot) | Fine-Tuned (0-shot) |
-|---|---|---|
-| Category accuracy | TBD | TBD |
-| Priority accuracy | TBD | TBD |
-| JSON parse success rate | TBD | TBD |
-| Consistency rate | TBD | TBD |
-| Avg prompt tokens | TBD | TBD |
-| p50 latency (ms) | TBD | TBD |
-| LLM-judge avg justification score | TBD | TBD |
+**Two methodology bugs caught and fixed along the way — this is the part
+that matters more than any single number below:**
 
-Full report (per-category breakdown, confusion matrix, failure examples)
-lands in `results/comparison_report.md` after running `eval/evaluate.py`.
+1. The first version of this dataset's train/test split was stratified by
+   category only, not by the underlying scenario template. Since the
+   generator draws from a small, fixed pool of ~40 phrasings per category,
+   a row-level random split let near-duplicate phrasing (same template,
+   different name/dept) leak into both train and test — inflating the
+   first fine-tuned run to a suspicious 100% category accuracy. Caught by
+   checking subject-line overlap between splits (89% of test examples
+   shared verbatim phrasing with training examples); fixed by holding out
+   entire scenario templates instead (`data/prepare_splits.py`).
+2. Fixing the split alone wasn't enough — the already-trained checkpoint
+   had been trained on the *old* split, which could still contain sibling
+   examples from templates the new split now holds out for test. Fixing
+   the data doesn't retroactively un-leak a model that already trained on
+   the leaky version. Caught this before publishing results, not after,
+   and retrained from scratch on the corrected split.
+
+Numbers below are from that retrained checkpoint evaluated on the
+leakage-free test set — the first evaluation run where both the data
+split and the model itself are clean.
+
+| Metric | Prompted Base (3-shot) | Fine-Tuned (0-shot, unmerged) | Fine-Tuned (0-shot, **merged**) |
+|---|---|---|---|
+| Category accuracy | 49.5% | 84.2% | *(same weights — unaffected by merge)* |
+| Priority accuracy | 21.1% | 24.2% | *(same weights — unaffected by merge)* |
+| JSON parse success rate | 100.0% | 100.0% | — |
+| Consistency rate (repeat agreement) | 83.2% | 71.6% | — |
+| Avg total tokens/inference | 561 | 221 | 219 |
+| p50 latency (ms) | 2990 | 3910 | **1086** |
+| p95 latency (ms) | 3672 | 4655 | **1246** |
+
+### What this actually shows
+
+- **Category classification: a real, generalizing win.** 49.5% → 84.2% on
+  genuinely unseen ticket phrasing (not memorized templates). Lower than
+  the leaky run's 91.6%, which is exactly the point — this number is
+  trustworthy in a way the earlier one wasn't. This is the headline
+  result.
+- **Priority classification: fine-tuning didn't help.** 21.1% → 24.2% —
+  both sit right at the 25% random-chance baseline for 4 classes. My
+  read: priority requires implicit reasoning about business impact from
+  the narrative, not surface lexical cues category classification can
+  lean on. With only ~40 scenario templates, 3 epochs, and rank-16 LoRA,
+  the model most likely memorized priority-per-template during training
+  rather than learning the underlying judgment, so it doesn't transfer to
+  unseen phrasing. This is a real limitation, not a rounding error — see
+  [Failure modes](#failure-modes-worth-naming) below.
+- **Consistency: a possible real drop, not fully confirmed.** Fine-tuned
+  came in 11.6 points below base (71.6% vs. 83.2%). Repeated runs of this
+  benchmark on identical settings have shown ~7-8 points of pure sampling
+  noise at this sample size (95 tickets × 3 repeats), so this gap is
+  larger than typical noise but not far enough outside it to claim
+  confidently without another repeated trial. Stated honestly rather than
+  rounded into a clean story either direction.
+- **Latency/cost: a real win, but only once served correctly.** The naive
+  comparison (unmerged LoRA adapter, base still in 4-bit) made the
+  fine-tuned model look *slower* than base despite using 61% fewer
+  tokens — an unmerged adapter pays extra matmul cost on every forward
+  pass. Merging the adapter (`merge_and_unload()`, done in bf16 since
+  PEFT's 4-bit merge is precision-lossy/fragile) removes that overhead
+  entirely: merged p50 latency is **2.75x faster than the base model**,
+  on top of the token savings. Bonus lesson: 4-bit quantization on a
+  model this small was actively counterproductive — a 1.5B model fits
+  comfortably in bf16 on a 16GB GPU, so the dequant overhead wasn't
+  buying anything. Quantization pays off when VRAM is the actual
+  constraint; here it wasn't.
+- **Overfits fast.** Training's `eval_loss` hit its best value at epoch
+  0.56 and got worse every eval step afterward while train loss kept
+  falling toward zero — classic overfitting on a small (711-example)
+  training set. `load_best_model_at_end=True` meant the saved adapter is
+  correctly the early best checkpoint, not the overfit final-epoch one,
+  but running the full 3 epochs was more than this dataset size needed.
+
+### Failure modes worth naming
+
+- **Base model has a strong "Software" bias for two categories.** It
+  scored a flat 0% on both Network and Access/Password, with
+  `Network->Software` (26x) and `Access/Password->Software` (21x) as the
+  dominant confusions — it's not randomly wrong, it's systematically
+  defaulting to one label.
+- **Fine-tuned model's main weak spot: Network, confused with Hardware.**
+  Network accuracy is only 42.3% — 15 of 26 Network test tickets were
+  misclassified as Hardware (`Network->Hardware`, 15x), the only
+  confusion the fine-tuned model has left. It's a defensible mistake, not
+  a random one: network jack/cabling/router issues genuinely share
+  vocabulary with hardware tickets. Every other category (Access/Password,
+  Hardware, Software, Billing) hit 100%. This is the clearest concrete
+  next step for this project: Network needs more diverse training
+  phrasing to separate it from Hardware.
+- **Priority judgment doesn't generalize from this dataset's diversity.**
+  The clearest actionable next step for this project, not a footnote:
+  either hand-write a larger, more diverse set of priority-labeled
+  examples per template, or add reasoning traces (chain-of-thought before
+  the final JSON) so the model has to articulate the impact reasoning
+  during training instead of pattern-matching a template to a label.
+
+Full report (per-category breakdown, confusion matrix, raw predictions
+with per-repeat outputs for consistency debugging) is in
+`results/comparison_report.md` and `results/*/predictions.jsonl`.
+
+**LLM-as-judge scoring of the free-text severity justifications is not
+yet run** — needs `eval/llm_judge.py` with an `ANTHROPIC_API_KEY`, which
+wasn't set up on the training pod. See [Running it](#running-it) below.
 
 ## Repo structure
 
