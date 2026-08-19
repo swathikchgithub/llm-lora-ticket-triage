@@ -323,4 +323,4 @@ fine-tuning work:
 
 ## License
 
-MIT (or your preference — update before publishing).
+[MIT](LICENSE)
