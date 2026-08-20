@@ -133,7 +133,7 @@ strawman) on the held-out test set, across multiple dimensions:
 
 ## Results
 
-Trained on an RTX A4000 (RunPod), 3 epochs, ~7 min wall-clock, well under
+Trained on an RTX A4500 (RunPod), 3 epochs, ~5.5 min wall-clock, well under
 $1. Numbers below are real, from `results/comparison_report.md` and
 `results/finetuned_model/merged_latency.json`.
 
@@ -162,53 +162,56 @@ split and the model itself are clean.
 
 | Metric | Prompted Base (3-shot) | Fine-Tuned (0-shot, unmerged) | Fine-Tuned (0-shot, **merged**) |
 |---|---|---|---|
-| Category accuracy | 49.5% | 84.2% | *(same weights — unaffected by merge)* |
-| Priority accuracy | 21.1% | 24.2% | *(same weights — unaffected by merge)* |
+| Category accuracy | 49.5% | 92.6% | *(same weights — unaffected by merge)* |
+| Priority accuracy | 21.1% | 30.5% | *(same weights — unaffected by merge)* |
 | JSON parse success rate | 100.0% | 100.0% | — |
-| Consistency rate (repeat agreement) | 83.2% | 71.6% | — |
+| Consistency rate (repeat agreement) | 83.2% | 75.8% | — |
 | Avg total tokens/inference | 561 | 221 | 219 |
-| p50 latency (ms) | 2990 | 3910 | **1086** |
-| p95 latency (ms) | 3672 | 4655 | **1246** |
+| p50 latency (ms) | 3021 | 3778 | **1010** |
+| p95 latency (ms) | 3627 | 4689 | **1260** |
 
 ### What this actually shows
 
-- **Category classification: a real, generalizing win.** 49.5% → 84.2% on
-  genuinely unseen ticket phrasing (not memorized templates). Lower than
-  the leaky run's 91.6%, which is exactly the point — this number is
-  trustworthy in a way the earlier one wasn't. This is the headline
-  result.
-- **Priority classification: fine-tuning didn't help.** 21.1% → 24.2% —
-  both sit right at the 25% random-chance baseline for 4 classes. My
-  read: priority requires implicit reasoning about business impact from
-  the narrative, not surface lexical cues category classification can
-  lean on. With only ~40 scenario templates, 3 epochs, and rank-16 LoRA,
-  the model most likely memorized priority-per-template during training
-  rather than learning the underlying judgment, so it doesn't transfer to
-  unseen phrasing. This is a real limitation, not a rounding error — see
+- **Category classification: a real, generalizing win.** 49.5% → 92.6% on
+  genuinely unseen ticket phrasing (not memorized templates). This is the
+  headline result. (A retrain on fresh infra landed a few points higher
+  than an earlier leakage-free run's 84.2% — LoRA training has real
+  run-to-run variance from initialization and data order; both numbers
+  are honest, neither is cherry-picked.)
+- **Priority classification: fine-tuning helps only a little.** 21.1% →
+  30.5% — both are near the 25% random-chance baseline for 4 classes, and
+  the improvement is modest at best. My read: priority requires implicit
+  reasoning about business impact from the narrative, not surface lexical
+  cues category classification can lean on. With only ~40 scenario
+  templates, 3 epochs, and rank-16 LoRA, the model most likely memorized
+  priority-per-template during training rather than learning the
+  underlying judgment, so it barely transfers to unseen phrasing. This is
+  a real limitation, not a rounding error — see
   [Failure modes](#failure-modes-worth-naming) below.
-- **Consistency: a possible real drop, not fully confirmed.** Fine-tuned
-  came in 11.6 points below base (71.6% vs. 83.2%). Repeated runs of this
-  benchmark on identical settings have shown ~7-8 points of pure sampling
-  noise at this sample size (95 tickets × 3 repeats), so this gap is
-  larger than typical noise but not far enough outside it to claim
-  confidently without another repeated trial. Stated honestly rather than
-  rounded into a clean story either direction.
+- **Consistency: no reliable difference.** Fine-tuned came in 7.4 points
+  below base (75.8% vs. 83.2%). Repeated runs of this benchmark on
+  identical settings have shown gaps in the same 7-8 point range from
+  pure sampling noise alone, at this sample size (95 tickets × 3
+  repeats) — so this isn't distinguishable from noise. Stated honestly
+  rather than rounded into a clean story either direction.
 - **Latency/cost: a real win, but only once served correctly.** The naive
-  comparison (unmerged LoRA adapter, base still in 4-bit) made the
-  fine-tuned model look *slower* than base despite using 61% fewer
-  tokens — an unmerged adapter pays extra matmul cost on every forward
-  pass. Merging the adapter (`merge_and_unload()`, done in bf16 since
-  PEFT's 4-bit merge is precision-lossy/fragile) removes that overhead
-  entirely: merged p50 latency is **2.75x faster than the base model**,
-  on top of the token savings. Bonus lesson: 4-bit quantization on a
-  model this small was actively counterproductive — a 1.5B model fits
-  comfortably in bf16 on a 16GB GPU, so the dequant overhead wasn't
-  buying anything. Quantization pays off when VRAM is the actual
-  constraint; here it wasn't.
-- **Overfits fast.** Training's `eval_loss` hit its best value at epoch
-  0.56 and got worse every eval step afterward while train loss kept
-  falling toward zero — classic overfitting on a small (711-example)
-  training set. `load_best_model_at_end=True` meant the saved adapter is
+  comparison (unmerged LoRA adapter) made the fine-tuned model look
+  *slower* than base despite using 61% fewer tokens — an unmerged adapter
+  pays extra matmul cost on every forward pass. Merging the adapter
+  (`merge_and_unload()`, done in bf16 since PEFT's 4-bit merge is
+  precision-lossy/fragile) removes that overhead entirely: merged p50
+  latency is **~3x faster than the base model**, on top of the token
+  savings. Bonus lesson: 4-bit quantization on a model this small was
+  actively counterproductive — a 1.5B model fits comfortably in bf16 on a
+  16-20GB GPU, so the dequant overhead wasn't buying anything.
+  Quantization pays off when VRAM is the actual constraint; here it
+  wasn't.
+- **Overfits fast, reproducibly.** Training's `eval_loss` hit its best
+  value at epoch 0.56 (1.155) and got monotonically worse every eval step
+  afterward (1.48 → 1.56 → 1.58 → 1.60 by epoch 2.81) while train loss
+  kept falling toward zero — classic overfitting on a small (711-example)
+  training set, and this exact pattern reproduced across independent
+  retrains. `load_best_model_at_end=True` meant the saved adapter is
   correctly the early best checkpoint, not the overfit final-epoch one,
   but running the full 3 epochs was more than this dataset size needed.
 
@@ -220,14 +223,14 @@ split and the model itself are clean.
   dominant confusions — it's not randomly wrong, it's systematically
   defaulting to one label.
 - **Fine-tuned model's main weak spot: Network, confused with Hardware.**
-  Network accuracy is only 42.3% — 15 of 26 Network test tickets were
-  misclassified as Hardware (`Network->Hardware`, 15x), the only
-  confusion the fine-tuned model has left. It's a defensible mistake, not
-  a random one: network jack/cabling/router issues genuinely share
-  vocabulary with hardware tickets. Every other category (Access/Password,
-  Hardware, Software, Billing) hit 100%. This is the clearest concrete
-  next step for this project: Network needs more diverse training
-  phrasing to separate it from Hardware.
+  Network accuracy is 73.1% — 7 of 26 Network test tickets were
+  misclassified as Hardware (`Network->Hardware`, 7x), the only confusion
+  the fine-tuned model has left. It's a defensible mistake, not a random
+  one: network jack/cabling/router issues genuinely share vocabulary with
+  hardware tickets. Every other category (Access/Password, Hardware,
+  Software, Billing) hit 100%. This is the clearest concrete next step
+  for this project: Network needs more diverse training phrasing to
+  separate it from Hardware.
 - **Priority judgment doesn't generalize from this dataset's diversity.**
   The clearest actionable next step for this project, not a footnote:
   either hand-write a larger, more diverse set of priority-labeled
