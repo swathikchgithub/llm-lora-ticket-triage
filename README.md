@@ -169,6 +169,7 @@ split and the model itself are clean.
 | Avg total tokens/inference | 561 | 221 | 219 |
 | p50 latency (ms) | 3021 | 3778 | **1010** |
 | p95 latency (ms) | 3627 | 4689 | **1260** |
+| LLM-judge avg justification score (1-5) | 1.35 | 1.66 | — |
 
 ### What this actually shows
 
@@ -214,6 +215,17 @@ split and the model itself are clean.
   retrains. `load_best_model_at_end=True` meant the saved adapter is
   correctly the early best checkpoint, not the overfit final-epoch one,
   but running the full 3 epochs was more than this dataset size needed.
+- **LLM-judge: a real, modest improvement in justification quality.**
+  1.35/5 → 1.66/5 (+23% relative). Both scores are low in absolute terms
+  against a 1-5 scale — worth reading correctly rather than spun. The
+  judge was calibrated first against `data/human_calibration_set.jsonl`
+  (85% agreement within ±1 point, mean absolute difference 0.70) and
+  found to be systematically ~0.7 points stricter than the reference
+  labels, especially compressing top-rated (5/5) justifications down to
+  3-4 — so read both scores as a conservative signal, not an absolute
+  scale. One more honesty note: the calibration set itself is
+  self-authored, not independently human-labeled, since there's no
+  annotation budget for a solo project — a real limitation, not hidden.
 
 ### Failure modes worth naming
 
@@ -240,11 +252,8 @@ split and the model itself are clean.
 
 Full report (per-category breakdown, confusion matrix, raw predictions
 with per-repeat outputs for consistency debugging) is in
-`results/comparison_report.md` and `results/*/predictions.jsonl`.
-
-**LLM-as-judge scoring of the free-text severity justifications is not
-yet run** — needs `eval/llm_judge.py` with an `ANTHROPIC_API_KEY`, which
-wasn't set up on the training pod. See [Running it](#running-it) below.
+`results/comparison_report.md` and `results/*/predictions.jsonl`. Judge
+scores are in `results/*/judge_scores.jsonl`.
 
 ## Repo structure
 
